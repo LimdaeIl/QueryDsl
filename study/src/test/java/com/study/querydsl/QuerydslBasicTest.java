@@ -1,12 +1,20 @@
 package com.study.querydsl;
 
+import com.querydsl.core.BooleanBuilder;
 import com.querydsl.core.Tuple;
 import com.querydsl.core.types.Expression;
+import com.querydsl.core.types.ExpressionUtils;
+import com.querydsl.core.types.Predicate;
+import com.querydsl.core.types.Projections;
+import com.querydsl.core.types.dsl.BooleanExpression;
 import com.querydsl.core.types.dsl.CaseBuilder;
 import com.querydsl.core.types.dsl.Expressions;
 import com.querydsl.core.types.dsl.NumberExpression;
 import com.querydsl.jpa.JPAExpressions;
 import com.querydsl.jpa.impl.JPAQueryFactory;
+import com.study.dto.MemberDto;
+import com.study.dto.QMemberDto;
+import com.study.dto.UserDto;
 import com.study.entity.Member;
 import com.study.entity.QMember;
 import com.study.entity.QTeam;
@@ -15,6 +23,7 @@ import jakarta.persistence.EntityManager;
 import jakarta.persistence.EntityManagerFactory;
 import jakarta.persistence.PersistenceContext;
 import jakarta.persistence.PersistenceUnit;
+import org.assertj.core.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -23,6 +32,8 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 
+import static com.querydsl.core.types.Projections.bean;
+import static com.querydsl.core.types.Projections.fields;
 import static com.querydsl.jpa.JPAExpressions.*;
 import static com.study.entity.QMember.member;
 import static com.study.entity.QTeam.team;
@@ -487,7 +498,7 @@ public class QuerydslBasicTest {
      * 1. 0 ~ 30살이 아닌 회원을 가장 먼저 출력
      * 2. 0 ~ 20살 회원 출력
      * 3. 21 ~ 30살 회원 출력
-     *
+     * <p>
      * Querydsl은 자바 코드로 작성하기 때문에 rankPath 처럼 복잡한 조건을 변수로 선언해서 select 절, orderBy
      * 절에서 함께 사용할 수 있다.
      */
@@ -541,6 +552,326 @@ public class QuerydslBasicTest {
                 .fetchOne();
 
         System.out.println("result = " + result);
+    }
+
+    /**
+     * 프로젝션 대상이 하나면 타입을 명확하게 지정할 수 있음
+     * 프로젝션 대상이 둘 이상이면 튜플이나 DTO로 조회
+     */
+    @Test
+    @DisplayName("프로젝션: select 대상 하나일 때 사용")
+    public void projectionTargetOne() throws Exception {
+        List<String> fetch = jpaQueryFactory
+                .select(member.username)
+                .from(member)
+                .fetch();
+
+        for (String s : fetch) {
+            System.out.println("s = " + s);
+        }
+    }
+
+    @Test
+    @DisplayName("프로젝션: select 대상 둘 이상일 때 사용")
+    public void projectionTargetTwoGoe() throws Exception {
+        List<Tuple> fetch = jpaQueryFactory
+                .select(member.username, member.age)
+                .from(member)
+                .fetch();
+
+        for (Tuple tuple : fetch) {
+            System.out.println("tuple.username = " + tuple.get(member.username));
+            System.out.println("tuple.age = " + tuple.get(member.age));
+        }
+    }
+
+    /**
+     * 순수 JPA에서 DTO를 조회할 때는 new 명령어를 사용해야함
+     * DTO의 package이름을 다 적어줘야해서 지저분함
+     * 생성자 방식만 지원함
+     */
+    @Test
+    @DisplayName("순수 JPA 에서 DTO 코드 조회 -MemberDto")
+    public void selectJPAMemberDto() {
+        List<MemberDto> result = em.createQuery(
+                        "select new com.study.dto.MemberDto(m.username, m.age) " +
+                                "from Member m", MemberDto.class)
+                .getResultList();
+
+        for (MemberDto memberDto : result) {
+            System.out.println("memberDto.getUsername() = " + memberDto.getUsername());
+            System.out.println("memberDto.getAge() = " + memberDto.getAge());
+        }
+    }
+
+    /**
+     * Querydsl 빈 생성(Bean population) - 결과를 DTO 반환할 때 사용
+     * 다음 3가지 방법 지원
+     * 1. 프로퍼티 접근
+     * 2. 필드 직접 접근
+     * 3. 생성자 사용
+     */
+    @Test
+    @DisplayName("빈 생성(Bean population): 프로퍼티 접근 - Setter")
+    public void beanPopulationSetter() {
+        List<MemberDto> fetch = jpaQueryFactory
+                .select(bean(MemberDto.class,
+                        member.username,
+                        member.age))
+                .from(member)
+                .fetch();
+
+        for (MemberDto memberDto : fetch) {
+            System.out.println("memberDto.getUsername() = " + memberDto.getUsername());
+            System.out.println("memberDto.getAge() = " + memberDto.getAge());
+        }
+    }
+
+    @Test
+    @DisplayName("빈 생성(Bean population): 필드 직접 접근")
+    public void beanPopulationField() {
+        List<MemberDto> fetch = jpaQueryFactory
+                .select(fields(MemberDto.class,
+                        member.username,
+                        member.age))
+                .from(member)
+                .fetch();
+
+        for (MemberDto memberDto : fetch) {
+            System.out.println("memberDto.getUsername() = " + memberDto.getUsername());
+            System.out.println("memberDto.getAge() = " + memberDto.getAge());
+        }
+    }
+
+    /**
+     * 별칭이 다를 때
+     * 프로퍼티나, 필드 접근 생성 방식에서 이름이 다를 때 해결 방안
+     * ExpressionUtils.as(source,alias) : 필드나, 서브 쿼리에 별칭 적용
+     * username.as("memberName") : 필드에 별칭 적용
+     */
+    @Test
+    @DisplayName("빈 생성(Bean population): 필드 직접 접근 - 별칭이 다를 때")
+    public void beanPopulationFieldByAlias() {
+        QMember memberSub = new QMember(member);
+
+        jpaQueryFactory.select(Projections.fields(UserDto.class,
+                                member.username.as("name"),
+                                ExpressionUtils.as(
+                                        select(memberSub.age.max())
+                                                .from(memberSub), "age")
+                        )
+                ).from(member)
+                .fetch();
+    }
+
+    @Test
+    @DisplayName("빈 생성(Bean population): 생성자 사용")
+    public void beanPopulationConstructor() {
+        List<MemberDto> fetch = jpaQueryFactory
+                .select(Projections.constructor(MemberDto.class,
+                        member.username,
+                        member.age))
+                .from(member)
+                .fetch();
+
+        for (MemberDto memberDto : fetch) {
+            System.out.println("memberDto.getUsername() = " + memberDto.getUsername());
+            System.out.println("memberDto.getAge() = " + memberDto.getAge());
+        }
+    }
+
+    /**
+     * 프로젝션과 결과 반환 - @QueryProjection
+     * 생성자 + @QueryProjection
+     * 이 방법은 컴파일러로 타입을 체크할 수 있으므로 가장 안전한 방법이다. 다만 DTO에 QueryDSL 어노테이션을 유지
+     * 해야 하는 점과 DTO까지 Q 파일을 생성해야 하는 단점이 있다.
+     */
+    @Test
+    @DisplayName("프로젝션과 결과 반환 -> 생성자 + @QueryProjection")
+    public void ProjectionToConstructor() {
+        List<MemberDto> fetch = jpaQueryFactory
+                .select(new QMemberDto(member.username, member.age))
+                .from(member)
+                .fetch();
+        for (MemberDto memberDto : fetch) {
+            System.out.println("memberDto.getUsername() = " + memberDto.getUsername());
+            System.out.println("memberDto.getAge() = " + memberDto.getAge());
+        }
+    }
+
+    /**
+     * distinct
+     * 참고: distinct는 JPQL의 distinct와 같다.
+     */
+    @Test
+    @DisplayName("distinct 사용")
+    public void distinct() {
+        List<String> fetch = jpaQueryFactory
+                .select(member.username).distinct()
+                .from(member)
+                .fetch();
+
+        for (String s : fetch) {
+            System.out.println("s = " + s);
+        }
+    }
+
+    /**
+     * 동적 쿼리 - BooleanBuilder 사용
+     * 동적 쿼리를 해결하는 두가지 방식
+     * 1. BooleanBuilder
+     * 2. Where 다중 파라미터 사용
+     */
+    @Test
+    @DisplayName("동적 쿼리 : BooleanBuilder")
+    public void queryBooleanBuilder() {
+        String usernameParam = "member1";
+        Integer ageParam = 10;
+
+        List<Member> result = searchMember1(usernameParam, ageParam);
+
+        for (Member member1 : result) {
+            System.out.println("member1.getUsername() = " + member1.getUsername());
+            System.out.println("member1.getAge() = " + member1.getAge());
+        }
+
+        Assertions.assertThat(result.size()).isEqualTo(1);
+    }
+
+    private List<Member> searchMember1(String usernameCond, Integer ageCond) {
+        BooleanBuilder builder = new BooleanBuilder();
+
+        if (usernameCond != null) {
+            builder.and(member.username.eq(usernameCond));
+        }
+        if (ageCond != null) {
+            builder.and(member.age.eq(ageCond));
+        }
+        return jpaQueryFactory
+                .selectFrom(member)
+                .where(builder)
+                .fetch();
+    }
+
+    /**
+     * 동적 쿼리 - Where 다중 파라미터 사용
+     *
+     * where 조건에 null 값은 무시된다.
+     * 메서드를 다른 쿼리에서도 재활용 할 수 있다.
+     * 쿼리 자체의 가독성이 높아진다.
+     */
+    @Test
+    @DisplayName("동적 쿼리 - Where 다중 파라미터 사용")
+    public void 동적쿼리_WhereParam() throws Exception {
+        String usernameParam = "member1";
+        Integer ageParam = 10;
+
+        List<Member> result = searchMember2(usernameParam, ageParam);
+
+        for (Member member1 : result) {
+            System.out.println("member1.getUsername() = " + member1.getUsername());
+            System.out.println("member1.getAge() = " + member1.getAge());
+        }
+
+        assertThat(result.size()).isEqualTo(1);
+    }
+
+    private List<Member> searchMember2(String usernameCond, Integer ageCond) {
+        return jpaQueryFactory
+                .selectFrom(member)
+//                .where(usernameEq(usernameCond), ageEq(ageCond))
+                .where(allEq(usernameCond, ageCond))
+                .fetch();
+    }
+
+    private BooleanExpression ageEq(Integer ageCond) {
+        return ageCond != null ? member.age.eq(ageCond) : null;
+    }
+
+    private BooleanExpression usernameEq(String usernameCond) {
+        return usernameCond != null ? member.username.eq(usernameCond) : null;
+    }
+
+    // 조합 가능
+    private BooleanExpression allEq(String usernameCond, Integer ageCond) {
+        return usernameEq(usernameCond).and(ageEq(ageCond));
+    }
+
+    /**
+     * 수정, 삭제 벌크 연산
+     * 쿼리 한 번으로 대량 데이터 수정
+     */
+    @Test
+    @DisplayName("쿼리 한 번으로 대량 데이터 수정")
+    public void queryUpdateBulk() {
+        long count = jpaQueryFactory
+                .update(member)
+                .set(member.username, "비회원")
+                .where(member.age.lt(28))
+                .execute();
+
+        System.out.println("비회원 수 = " + count);
+    }
+
+    /**
+     * 곱하기: multiply(x)
+     */
+    @Test
+    @DisplayName("나이에 숫자 1 더하기")
+    public void queryUpdateBulkAddAgeOne() {
+        long execute = jpaQueryFactory
+                .update(member)
+                .set(member.age, member.age.add(1))
+                .execute();
+
+        System.out.println("execute = " + execute);
+    }
+
+    /**
+     * 주의: JPQL 배치와 마찬가지로, 영속성 컨텍스트에 있는 엔티티를 무시하고 실행되기 때문에 배치 쿼리를 실행하
+     * 고 나면 영속성 컨텍스트를 초기화 하는 것이 안전하다.
+     */
+    @Test
+    @DisplayName("쿼리 한번으로 대량 데이터 삭제 - 나이가 18 살 초과인 모든 값 삭제")
+    public void queryUpdateBulkDelete18AgeGt() {
+        long execute = jpaQueryFactory
+                .delete(member)
+                .where(member.age.gt(18))
+                .execute();
+
+        System.out.println("execute = " + execute);
+    }
+
+    /**
+     * SQL function 호출하기
+     * SQL function은 JPA와 같이 Dialect에 등록된 내용만 호출할 수 있다
+     */
+
+    @Test
+    @DisplayName("member -> M으로 변경하는 replace 함수 사용")
+    public void queryReplace() throws Exception {
+        String result = jpaQueryFactory
+                .select(Expressions.stringTemplate("function('replace', {0}, {1}, {2})",
+                        member.username, "member", "M"))
+                .from(member)
+                .fetchFirst();
+        System.out.println("s = " + result);
+    }
+
+    /**
+     * lower 같은 ansi 표준 함수들은 querydsl이 상당부분 내장하고 있다. 따라서 다음과 같이 처리해도 결과는 같다.
+     * where(member.username.eq(member.username.lower()))
+     */
+    @Test
+    @DisplayName("member -> 소문자로 변경해서 비교해라.")
+    public void queryLower() throws Exception {
+        String s = jpaQueryFactory
+                .select(Expressions.stringTemplate("function('lower', {0})",
+                        member.username))
+                .from(member)
+                .fetchFirst();
+
+        System.out.println("s = " + s);
     }
 }
 
